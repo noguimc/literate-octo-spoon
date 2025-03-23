@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>联机坦克大战</title>
+    <style>
+	
+	:root {
+            --tank-size: 50px;
+            --bullet-size: 8px;
+            --cannon-length: 35px;
+            --terrain-color: #2ecc71;
+            --red-tank: #e74c3c;
+            --blue-tank: #3498db;
+        }
+
+        body {
+            background: #2c3e50;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+
+        #gameContainer {
+            width: 1200px;
+            height: 800px;
+            position: relative;
+            background: linear-gradient(to bottom, #7f8c8d, #95a5a6);
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .tank {
+            width: var(--tank-size);
+            height: var(--tank-size);
+            position: absolute;
+            transition: transform 0.1s;
+            z-index: 2;
+        }
+
+        .tank-body {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            border-radius: 6px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
+
+        .cannon {
+            position: absolute;
+            width: 6px;
+            height: var(--cannon-length);
+            background: #2c3e50;
+            bottom: 50%;
+            left: 50%;
+            transform-origin: center bottom;
+            transition: transform 0.2s ease;
+            border-radius: 2px;
+        }
+
+        #tank1 .tank-body { background: var(--red-tank); }
+        #tank2 .tank-body { background: var(--blue-tank); }
+
+        .bullet {
+            width: var(--bullet-size);
+            height: var(--bullet-size);
+            position: absolute;
+            border-radius: 50%;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            z-index: 1;
+        }
+
+        #hud {
+            position: absolute;
+            top: 10px;
+            width: calc(100% - 60px);
+            display: flex;
+            justify-content: space-between;
+            padding: 0 30px;
+            color: white;
+            font-size: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            z-index: 3;
+        }
+
+        .terrain {
+            position: absolute;
+            background: var(--terrain-color);
+            border-radius: 8px;
+            box-shadow: inset 0 4px 10px rgba(0,0,0,0.2);
+            z-index: 1;
+        }
+
+        #message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 40px;
+            color: white;
+            text-shadow: 3px 3px 6px rgba(0,0,0,0.5);
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+            z-index: 4;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="hud">
+            <div>在线玩家: <span id="playerCount">0</span></div>
+        </div>
+        <div id="message"></div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const game = {
+            elements: {
+                container: document.getElementById('gameContainer'),
+                playerCount: document.getElementById('playerCount'),
+                message: document.getElementById('message')
+            },
+            state: {
+                players: {},
+                bullets: [],
+                obstacles: []
+            }
+        };
+
+        // 渲染玩家
+        function renderPlayers(players) {
+            // 移除旧玩家
+            document.querySelectorAll('.player').forEach(e => e.remove());
+            
+            Object.entries(players).forEach(([id, player]) => {
+                const tank = document.createElement('div');
+                tank.className = 'player';
+                tank.style.cssText = `
+                    width: 50px;
+                    height: 50px;
+                    position: absolute;
+                    left: ${player.x}px;
+                    top: ${player.y}px;
+                    background: ${player.color};
+                    transform: rotate(${getRotation(player.direction)}deg);
+                `;
+                game.elements.container.appendChild(tank);
+            });
+        }
+
+        // 渲染子弹
+        function renderBullets(bullets) {
+            document.querySelectorAll('.bullet').forEach(e => e.remove());
+            
+            bullets.forEach(bullet => {
+                const element = document.createElement('div');
+                element.className = 'bullet';
+                element.style.cssText = `
+                    left: ${bullet.x}px;
+                    top: ${bullet.y}px;
+                    background: ${game.state.players[bullet.owner]?.color || '#fff'};
+                `;
+                game.elements.container.appendChild(element);
+            });
+        }
+
+        function getRotation(direction) {
+            const rotations = {
+                up: 0, left: -90, down: 180, right: 90,
+                upLeft: -45, upRight: 45, downLeft: -135, downRight: 135
+            };
+            return rotations[direction] || 0;
+        }
+
+        // 网络事件处理
+        socket.on('init', (data) => {
+            game.state.players = data.players;
+            game.state.obstacles = data.obstacles;
+            renderPlayers(game.state.players);
+        });
+
+        socket.on('update', (data) => {
+            game.state.players = data.players;
+            game.state.bullets = data.bullets;
+            renderPlayers(data.players);
+            renderBullets(data.bullets);
+            game.elements.playerCount.textContent = Object.keys(data.players).length;
+        });
+
+        socket.on('playerJoined', (player) => {
+            game.state.players[player.id] = player;
+        });
+
+        socket.on('playerLeft', (playerId) => {
+            delete game.state.players[playerId];
+        });
+
+        // 玩家输入处理
+        const keys = {};
+        document.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            sendInput();
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+            sendInput();
+        });
+
+        function sendInput() {
+            const input = {
+                up: keys['w'] || keys['ArrowUp'],
+                down: keys['s'] || keys['ArrowDown'],
+                left: keys['a'] || keys['ArrowLeft'],
+                right: keys['d'] || keys['ArrowRight'],
+                fire: keys[' '], // 空格键射击
+                direction: calculateDirection()
+            };
+            socket.emit('input', input);
+        }
+
+        function calculateDirection() {
+            const dir = [];
+            if (keys['w'] || keys['ArrowUp']) dir.push('up');
+            if (keys['s'] || keys['ArrowDown']) dir.push('down');
+            if (keys['a'] || keys['ArrowLeft']) dir.push('left');
+            if (keys['d'] || keys['ArrowRight']) dir.push('right');
+            
+            if (dir.length === 0) return '';
+            if (dir.length === 1) return dir[0];
+            return dir.sort().join('');
+        }
+    </script>
+</body>
+</html>
